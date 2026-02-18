@@ -204,9 +204,10 @@ if (isset($_GET['alert'])) {
             <p>Copyright &copy; <?= date('Y'); ?> - Inventory System Academic</p>
         </div>
 
-        <!-- <footer class="site-footer">
-            Created By <a href="#" title="T.P"><i class="fa fa-copyright" aria-hidden="true"></i>Nune Fathih</a>
-        </footer> -->
+        <footer class="site-footer">
+            Created By <a href="https://github.com/ptydhis" target="_blank" title="Redbddd"><i class="fa fa-copyright"
+                    aria-hidden="true"></i>ptydhis</a>
+        </footer>
 
     </div>
 
