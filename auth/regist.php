@@ -134,7 +134,7 @@ if (isset($_GET['alert'])) {
 <body>
     <div class="login-container">
         <div class="logo">
-            <img src="../assets/img/PRODI.jpg" alt="PRODI Logo">
+            <img src="../assets/img/Logo iVESTA.png" alt="PRODI Logo">
         </div>
         <!-- <h3 class="form-title">REGISTRASI</h3> -->
         <h5 class="subtitle">Selamat Datang di iVESTA</h5>

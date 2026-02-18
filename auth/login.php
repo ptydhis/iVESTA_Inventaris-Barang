@@ -175,7 +175,7 @@ if (isset($_GET['alert'])) {
 <body>
     <div class="login-container">
         <div class="logo">
-            <img src="../assets/img/PRODI.jpg" alt="PSTI Logo">
+            <img src="../assets/img/Logo iVESTA.png" alt="PSTI Logo">
         </div>
         <h5 class="subtitle">Selamat Datang di iVESTA</h5>
         <div class="role-info">
@@ -204,9 +204,9 @@ if (isset($_GET['alert'])) {
             <p>Copyright &copy; <?= date('Y'); ?> - Inventory System Academic</p>
         </div>
 
-        <footer class="site-footer">
+        <!-- <footer class="site-footer">
             Created By <a href="#" title="T.P"><i class="fa fa-copyright" aria-hidden="true"></i>Nune Fathih</a>
-        </footer>
+        </footer> -->
 
     </div>
 
