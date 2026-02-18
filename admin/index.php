@@ -75,12 +75,115 @@ $query_user = "SELECT COUNT(*) AS total FROM t_user";
 $user = mysqli_fetch_array(mysqli_query($conn, $query_user));
 
 // Query total barang yang sedang dipinjam
-$query_pinjam = "SELECT COUNT(*) AS total_dipinjam FROM t_pinjam WHERE status_peminjaman = 'Dipinjam'";
+$query_pinjam = "SELECT COUNT(*) AS total_dipinjam FROM t_pinjam WHERE status_peminjaman IN ('Dipinjam', 'Telat')";
 $pinjam = mysqli_fetch_array(mysqli_query($conn, $query_pinjam));
 
-// Query total barang untuk dashboard
-$query_barang = "SELECT COUNT(*) AS total FROM t_barang_detail";
-$barang = mysqli_fetch_array(mysqli_query($conn, $query_barang));
+// Query untuk statistik card
+$query_barang = "SELECT COUNT(*) as total FROM t_barang_detail";
+$result_barang = mysqli_query($conn, $query_barang);
+$total_barang = mysqli_fetch_assoc($result_barang);
+
+// Query untuk filter grafik
+$query_all_barang = "SELECT id_barang, nama_barang FROM t_barang ORDER BY nama_barang";
+$result_all_barang = mysqli_query($conn, $query_all_barang);
+
+$query_tahun = "SELECT DISTINCT YEAR(tanggal_pinjam) as tahun 
+                FROM t_pinjam 
+                WHERE status_peminjaman != 'Menunggu Verifikasi'
+                ORDER BY tahun DESC";
+$result_tahun = mysqli_query($conn, $query_tahun);
+
+// Ambil parameter filter
+$selected_barang = isset($_GET['barang']) ? $_GET['barang'] : '';
+$selected_tahun = isset($_GET['tahun']) ? $_GET['tahun'] : date('Y');
+
+// Query data grafik
+if ($selected_barang) {
+    // Jika memilih barang tertentu
+    $query_grafik = "SELECT 
+                        MONTH(p.tanggal_pinjam) as bulan,
+                        COUNT(*) as jumlah,
+                        b.nama_barang
+                    FROM t_pinjam p
+                    JOIN t_barang_detail bd ON p.id_detail = bd.id_detail
+                    JOIN t_barang b ON bd.id_barang = b.id_barang
+                    WHERE p.status_peminjaman != 'Menunggu Verifikasi'
+                    AND b.id_barang = '$selected_barang'
+                    AND YEAR(p.tanggal_pinjam) = '$selected_tahun'
+                    GROUP BY MONTH(p.tanggal_pinjam)
+                    ORDER BY MONTH(p.tanggal_pinjam)";
+} else {
+    // Jika memilih semua barang (top 5 barang paling banyak dipinjam)
+    $query_grafik = "SELECT 
+                        b.id_barang,
+                        b.nama_barang,
+                        MONTH(p.tanggal_pinjam) as bulan,
+                        COUNT(*) as jumlah
+                    FROM t_pinjam p
+                    JOIN t_barang_detail bd ON p.id_detail = bd.id_detail
+                    JOIN t_barang b ON bd.id_barang = b.id_barang
+                    WHERE p.status_peminjaman != 'Menunggu Verifikasi'
+                    AND YEAR(p.tanggal_pinjam) = '$selected_tahun'
+                    GROUP BY b.id_barang, MONTH(p.tanggal_pinjam)
+                    ORDER BY jumlah DESC
+                    LIMIT 5";
+}
+
+$result_grafik = mysqli_query($conn, $query_grafik);
+
+// Format data untuk chart
+$chart_data = [];
+$months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Ags', 'Sep', 'Okt', 'Nov', 'Des'];
+$colors = [
+    'rgba(54, 162, 235, 0.7)',
+    'rgba(255, 99, 132, 0.7)',
+    'rgba(75, 192, 192, 0.7)',
+    'rgba(255, 159, 64, 0.7)',
+    'rgba(153, 102, 255, 0.7)',
+    'rgba(201, 203, 207, 0.7)'
+];
+
+// Inisialisasi data untuk semua bulan
+if ($selected_barang) {
+    // Untuk satu barang
+    $data = array_fill(0, 12, 0);
+    while ($row = mysqli_fetch_assoc($result_grafik)) {
+        $bulan_index = $row['bulan'] - 1;
+        $data[$bulan_index] = $row['jumlah'];
+        $barang_label = $row['nama_barang'];
+    }
+    $chart_data[] = [
+        'label' => $barang_label,
+        'data' => $data,
+        'backgroundColor' => $colors[array_rand($colors)] // Random color for single item
+    ];
+} else {
+    // Untuk semua barang (top 5)
+    $all_data = [];
+    mysqli_data_seek($result_grafik, 0); // Reset pointer result
+
+    // Inisialisasi data untuk semua barang
+    while ($row = mysqli_fetch_assoc($result_grafik)) {
+        if (!isset($all_data[$row['id_barang']])) {
+            $all_data[$row['id_barang']] = [
+                'label' => $row['nama_barang'],
+                'data' => array_fill(0, 12, 0)
+            ];
+        }
+        $bulan_index = $row['bulan'] - 1;
+        $all_data[$row['id_barang']]['data'][$bulan_index] = $row['jumlah'];
+    }
+
+    $color_index = 0;
+    foreach ($all_data as $barang) {
+        $chart_data[] = [
+            'label' => $barang['label'],
+            'data' => $barang['data'],
+            'backgroundColor' => $colors[$color_index % count($colors)]
+        ];
+        $color_index++;
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -96,6 +199,46 @@ $barang = mysqli_fetch_array(mysqli_query($conn, $query_barang));
         href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Raleway:wght@400;500;600&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="../assets/css/style.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --transition-speed: 0.3s;
+        }
+
+        .filter-box {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .filter-select {
+            width: 150px !important;
+        }
+
+        .refresh-btn {
+            background: none;
+            border: none;
+            color: #6c757d;
+            cursor: pointer;
+            font-size: 1.2rem;
+            padding: 0 5px;
+        }
+
+        .refresh-btn:hover {
+            color: #0d6efd;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 400px;
+            margin-bottom: 20px;
+        }
+
+        .main-content {
+            margin-bottom: 60px;
+        }
+    </style>
 </head>
 
 <body>
@@ -221,6 +364,66 @@ $barang = mysqli_fetch_array(mysqli_query($conn, $query_barang));
             </div>
         </nav>
 
+        <!-- Filter Content -->
+        <div class="container-fluid">
+            <div class="table-container">
+                <div class="table-header d-flex justify-content-between align-items-center mb-3">
+                    <!-- Filter Section -->
+                    <div class="d-flex align-items-center gap-3">
+                        <div class="d-flex align-items-center gap-2">
+                            <label for="barang" class="form-label mb-0">Nama Barang:</label>
+                            <select class="form-select form-select-sm filter-select" name="barang" id="barang"
+                                style="width: 170px;">
+                                <option value="">Semua Barang</option>
+                                <?php
+                                mysqli_data_seek($result_all_barang, 0);
+                                while ($barang = mysqli_fetch_assoc($result_all_barang)): ?>
+                                    <option value="<?= $barang['id_barang'] ?>" <?= $selected_barang == $barang['id_barang'] ? 'selected' : '' ?>>
+                                        <?= htmlspecialchars($barang['nama_barang']) ?>
+                                    </option>
+                                <?php endwhile; ?>
+                            </select>
+                        </div>
+
+                        <div class="d-flex align-items-center gap-2">
+                            <label for="tahun" class="form-label mb-0">Tahun:</label>
+                            <select class="form-select form-select-sm filter-select" name="tahun" id="tahun"
+                                style="width: 110px;">
+                                <?php
+                                mysqli_data_seek($result_tahun, 0);
+                                while ($tahun = mysqli_fetch_assoc($result_tahun)): ?>
+                                    <option value="<?= $tahun['tahun'] ?>" <?= $selected_tahun == $tahun['tahun'] ? 'selected' : '' ?>>
+                                        <?= $tahun['tahun'] ?>
+                                    </option>
+                                <?php endwhile; ?>
+                            </select>
+                        </div>
+
+                        <button type="button" class="btn btn-primary btn-sm" id="applyFilter">
+                            <i class="fas fa-filter"></i> Filter
+                        </button>
+                        <button type="button" class="refresh-btn" id="refreshBtn" title="Reset Filter">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Graphic Content -->
+        <div class="container-fluid mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header bg-white">
+                    <h5 class="card-title mb-0 text-center">GRAFIK PEMINJAMAN BARANG TERBANYAK</h5>
+                </div>
+                <div class="card-body">
+                    <div class="chart-container">
+                        <canvas id="peminjamanChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Dashboard Content -->
         <div class="container-fluid">
             <div class="row g-4 mb-4">
@@ -231,7 +434,7 @@ $barang = mysqli_fetch_array(mysqli_query($conn, $query_barang));
                             <i class="fas fa-box"></i>
                         </div>
                         <h5 class="card-title">BARANG</h5>
-                        <span class="card-value"><?= $barang['total'] ?></span>
+                        <span class="card-value"><?= $total_barang['total'] ?></span>
                         <span class="card-text">Total Data Barang</span>
                     </div>
                 </div>
@@ -368,7 +571,7 @@ $barang = mysqli_fetch_array(mysqli_query($conn, $query_barang));
 
             // Save state to localStorage
             const isCollapsed = sidebar.classList.contains('collapsed');
-            localStorage.setItem('sidebarCollapsed', isCollapsed);
+            localStorage.setitem('sidebarCollapsed', isCollapsed);
         });
 
         // Check for saved sidebar state and set active menu
@@ -474,6 +677,68 @@ $barang = mysqli_fetch_array(mysqli_query($conn, $query_barang));
                 new bootstrap.Modal(document.getElementById('editProfileModal')).show();
             });
         }
+
+        // Apply filter button
+        document.getElementById('applyFilter').addEventListener('click', function () {
+            const barang = document.getElementById('barang').value;
+            const tahun = document.getElementById('tahun').value;
+            window.location.href = `?barang=${barang}&tahun=${tahun}`;
+        });
+
+        // Refresh button
+        document.getElementById('refreshBtn').addEventListener('click', function () {
+            window.location.href = window.location.pathname;
+        });
+
+        // Initialize Chart
+        document.addEventListener('DOMContentLoaded', function () {
+            const ctx = document.getElementById('peminjamanChart').getContext('2d');
+            const chartData = {
+                labels: ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Ags', 'Sep', 'Okt', 'Nov', 'Des'],
+                datasets: <?= json_encode($chart_data) ?>
+            };
+
+            const peminjamanChart = new Chart(ctx, {
+                type: 'bar',
+                data: chartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Jumlah Peminjaman'
+                            },
+                            ticks: {
+                                stepSize: 1,
+                                precision: 0
+                            },
+                            suggestedMax: 10
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Bulan'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function (context) {
+                                    return context.dataset.label + ': ' + context.raw;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        });
     </script>
 </body>
 

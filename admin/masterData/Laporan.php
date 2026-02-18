@@ -55,18 +55,18 @@ if (isset($_GET['cetak'])) {
     // Get report data for printing
     if ($filter_jenis === 'barang') {
         if ($id_item) {
-            $query = "SELECT bd.id_detail, bd.kode_barang, bd.kondisi, bd.tanggal_maintenance,
-                             b.id_barang, b.nama_barang, b.merk, b.foto_barang, b.milik
-                      FROM t_barang_detail bd
-                      JOIN t_barang b ON bd.id_barang = b.id_barang
-                      WHERE bd.id_detail = '$id_item'";
+            $query = "SELECT bd.id_detail, bd.kode_barang, bd.kondisi, bd.tanggal_maintenance, bd.note,
+                         b.id_barang, b.nama_barang, b.merk, b.foto_barang, b.milik
+                  FROM t_barang_detail bd
+                  JOIN t_barang b ON bd.id_barang = b.id_barang
+                  WHERE bd.id_detail = '$id_item'";
         } else {
-            $query = "SELECT bd.id_detail, bd.kode_barang, bd.kondisi, bd.tanggal_maintenance,
-                             b.id_barang, b.nama_barang, b.merk, b.foto_barang, b.milik
-                      FROM t_barang_detail bd
-                      JOIN t_barang b ON bd.id_barang = b.id_barang
-                      WHERE 1=1 $tanggal_condition $kondisi_condition
-                      ORDER BY b.nama_barang ASC, bd.tanggal_maintenance ASC";
+            $query = "SELECT bd.id_detail, bd.kode_barang, bd.kondisi, bd.tanggal_maintenance, bd.note,
+                         b.id_barang, b.nama_barang, b.merk, b.foto_barang, b.milik
+                  FROM t_barang_detail bd
+                  JOIN t_barang b ON bd.id_barang = b.id_barang
+                  WHERE 1=1 $tanggal_condition $kondisi_condition
+                  ORDER BY b.nama_barang ASC, bd.tanggal_maintenance ASC";
         }
     } else {
         if ($id_item) {
@@ -217,6 +217,7 @@ if (isset($_GET['cetak'])) {
                         <th>Merk</th>
                         <th>Milik</th>
                         <th>Tanggal</th>
+                        <th>Keterangan</th>
                         <th>Kondisi</th>
                     <?php else: ?>
                         <th>No</th>
@@ -247,6 +248,7 @@ if (isset($_GET['cetak'])) {
                                 <td>
                                     <?= $row['tanggal_maintenance'] ? date('d M Y H:i', strtotime($row['tanggal_maintenance'])) : '-' ?>
                                 </td>
+                                <td><?= htmlspecialchars($row['note'] ?? '-') ?></td>
                                 <td>
                                     <?php
                                     $badgeClass = '';
@@ -295,6 +297,9 @@ if (isset($_GET['cetak'])) {
                                             break;
                                         case 'Telat':
                                             $badgeClass = 'badge bg-primary';
+                                            break;
+                                        case 'Selesai':
+                                            $badgeClass = 'badge bg-secondary';
                                             break;
                                         default:
                                             $badgeClass = 'bg-secondary';
@@ -478,7 +483,7 @@ $end_page = min($total_pages, $current_page + 2);
 
 // Get report data with pagination
 if ($filter_jenis === 'barang') {
-    $query = "SELECT bd.id_detail, bd.kode_barang, bd.kondisi, bd.tanggal_maintenance,
+    $query = "SELECT bd.id_detail, bd.kode_barang, bd.kondisi, bd.tanggal_maintenance, bd.note,
                  b.id_barang, b.nama_barang, b.merk, b.milik, b.foto_barang
           FROM t_barang_detail bd
           JOIN t_barang b ON bd.id_barang = b.id_barang
@@ -738,6 +743,7 @@ $result = mysqli_query($conn, $query);
                                     </option>
                                     <option value="Dikembalikan" <?= $filter_status == 'Dikembalikan' ? 'selected' : '' ?>>
                                         Dikembalikan</option>
+                                    <option value="Selesai" <?= $filter_status == 'Selesai' ? 'selected' : '' ?>>Selesai</option>
                                     <option value="Hilang" <?= $filter_status == 'Hilang' ? 'selected' : '' ?>>Hilang</option>
                                     <option value="Telat" <?= $filter_status == 'Telat' ? 'selected' : '' ?>>Telat</option>
                                     <option value="Ditolak" <?= $filter_status == 'Ditolak' ? 'selected' : '' ?>>Ditolak</option>
@@ -758,6 +764,7 @@ $result = mysqli_query($conn, $query);
                                         <th style="width: 15%" class="text-center">Merk</th>
                                         <th style="width: 10%" class="text-center">Milik</th>
                                         <th style="width: 15%" class="text-center">Tanggal</th>
+                                        <th style="width: 15%" class="text-center">Keterangan</th>
                                         <th style="width: 10%" class="text-center">Kondisi</th>
                                         <th style="width: 10%" class="text-center">Aksi</th>
                                     <?php else: ?>
@@ -800,6 +807,7 @@ $result = mysqli_query($conn, $query);
                                                 <td class="text-center">
                                                     <?= $row['tanggal_maintenance'] ? date('d M Y H:i', strtotime($row['tanggal_maintenance'])) : '-' ?>
                                                 </td>
+                                                <td class="text-center"><?= htmlspecialchars($row['note'] ?? '-') ?></td>
                                                 <td class="text-center">
                                                     <?php
                                                     $badgeClass = '';
@@ -854,6 +862,9 @@ $result = mysqli_query($conn, $query);
                                                             break;
                                                         case 'Telat':
                                                             $badgeClass = 'badge-waiting';
+                                                            break;
+                                                        case 'Selesai':
+                                                            $badgeClass = 'badge bg-secondary';
                                                             break;
                                                         default:
                                                             $badgeClass = 'bg-secondary';

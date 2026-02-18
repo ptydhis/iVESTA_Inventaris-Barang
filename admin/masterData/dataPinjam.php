@@ -123,13 +123,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 1. Update status peminjaman di t_pinjam
             $query1 = "UPDATE t_pinjam 
                       SET status_peminjaman = 'Dikembalikan', tanggal_kembali = NOW() 
-                      WHERE id_pinjam = ? AND status_peminjaman = 'Dipinjam'";
+                      WHERE id_pinjam = ? AND (status_peminjaman = 'Dipinjam' OR status_peminjaman = 'Telat')";
             $stmt1 = $conn->prepare($query1);
             $stmt1->bind_param("i", $id_pinjam);
             $stmt1->execute();
 
             if ($stmt1->affected_rows === 0) {
-                throw new Exception("Gagal mengupdate status peminjaman: Peminjaman tidak ditemukan atau sudah dikembalikan");
+                throw new Exception("Gagal mengupdate status peminjaman: Peminjaman tidak ditemukan atau status tidak valid");
             }
 
             // 2. Dapatkan id_detail dari peminjaman
@@ -149,16 +149,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 3. Update status barang di t_barang_detail menjadi Tersedia
             $query3 = "UPDATE t_barang_detail 
                       SET status = 'Tersedia' 
-                      WHERE id_detail = ? AND status = 'Dipinjam'";
+                      WHERE id_detail = ? AND (status = 'Dipinjam' OR status = 'Menunggu Verifikasi')";
             $stmt3 = $conn->prepare($query3);
             $stmt3->bind_param("i", $id_detail);
             $stmt3->execute();
 
             if ($stmt3->affected_rows === 0) {
-                throw new Exception("Gagal mengupdate status barang: Barang tidak ditemukan atau status bukan 'Dipinjam'");
+                throw new Exception("Gagal mengupdate status barang: Barang tidak ditemukan atau status tidak valid");
             }
 
             $_SESSION['success'] = "Pengembalian berhasil dicatat";
+        } elseif ($action == 'finish') {
+            // 1. Update status peminjaman di t_pinjam menjadi Selesai
+            $query1 = "UPDATE t_pinjam 
+                      SET status_peminjaman = 'Selesai'
+                      WHERE id_pinjam = ? AND status_peminjaman = 'Dikembalikan'";
+            $stmt1 = $conn->prepare($query1);
+            $stmt1->bind_param("i", $id_pinjam);
+            $stmt1->execute();
+
+            if ($stmt1->affected_rows === 0) {
+                throw new Exception("Gagal mengupdate status peminjaman: Peminjaman tidak ditemukan atau status bukan 'Dikembalikan'");
+            }
+
+            $_SESSION['success'] = "Peminjaman berhasil ditandai selesai";
         } elseif ($action == 'reject') {
             // 1. Update status peminjaman di t_pinjam
             $query1 = "UPDATE t_pinjam 
@@ -280,7 +294,7 @@ $search_condition = $search ? "WHERE b.nama_barang LIKE '%$search%' OR bd.kode_b
 
 // Filter status
 $status_filter = isset($_GET['status']) ? mysqli_real_escape_string($conn, $_GET['status']) : '';
-if ($status_filter && in_array($status_filter, ['Menunggu Verifikasi', 'Dipinjam', 'Dikembalikan', 'Hilang'])) {
+if ($status_filter && in_array($status_filter, ['Menunggu Verifikasi', 'Dipinjam', 'Dikembalikan', 'Selesai', 'Hilang', 'Ditolak', 'Telat'])) {
     $status_condition = $search_condition ? " AND tp.status_peminjaman = '$status_filter'" : "WHERE tp.status_peminjaman = '$status_filter'";
 } else {
     $status_condition = '';
@@ -311,7 +325,9 @@ $query = "SELECT tp.id_pinjam, tp.tanggal_pinjam, tp.tanggal_kembali, tp.status_
             CASE 
               WHEN tp.status_peminjaman = 'Menunggu Verifikasi' THEN 1
               WHEN tp.status_peminjaman = 'Dipinjam' THEN 2
-              ELSE 3
+              WHEN tp.status_peminjaman = 'Telat' THEN 3
+              WHEN tp.status_peminjaman = 'Dikembalikan' THEN 4
+              ELSE 5
             END,
             tp.tanggal_pinjam DESC
           LIMIT $offset, $entries_per_page";
@@ -488,7 +504,6 @@ mysqli_query($conn, $update_telat_query);
                     <div class="entries-info">
                         Show
                         <select class="form-select form-select-sm d-inline-block w-auto" id="entriesPerPage">
-
                             <option value="10" <?= $entries_per_page == 10 ? 'selected' : '' ?>>10</option>
                             <option value="25" <?= $entries_per_page == 25 ? 'selected' : '' ?>>25</option>
                             <option value="50" <?= $entries_per_page == 50 ? 'selected' : '' ?>>50</option>
@@ -515,10 +530,13 @@ mysqli_query($conn, $update_telat_query);
                                 </option>
                                 <option value="Dikembalikan" <?= $status_filter == 'Dikembalikan' ? 'selected' : '' ?>>
                                     Dikembalikan</option>
+                                <option value="Selesai" <?= $status_filter == 'Selesai' ? 'selected' : '' ?>>
+                                    Selesai</option>
                                 <option value="Hilang" <?= $status_filter == 'Hilang' ? 'selected' : '' ?>>Hilang</option>
                                 <option value="Ditolak" <?= $status_filter == 'Ditolak' ? 'selected' : '' ?>>Ditolak
                                 </option>
                                 <option value="Telat" <?= $status_filter == 'Telat' ? 'selected' : '' ?>>Telat</option>
+                                <option value="Dibooking" <?= $status_filter == 'Dibooking' ? 'selected' : '' ?>>Dibooking</option>
                             </select>
                         </div>
                     </div>
@@ -554,6 +572,9 @@ mysqli_query($conn, $update_telat_query);
                                         case 'Dikembalikan':
                                             $statusClass = 'badge bg-success';
                                             break;
+                                        case 'Selesai':
+                                            $statusClass = 'badge bg-secondary';
+                                            break;
                                         case 'Hilang':
                                             $statusClass = 'badge bg-dark';
                                             break;
@@ -562,6 +583,9 @@ mysqli_query($conn, $update_telat_query);
                                             break;
                                         case 'Telat':
                                             $statusClass = 'badge-waiting';
+                                            break;
+                                        case 'Dibooking':
+                                            $statusClass = 'badge-booking';
                                             break;
                                     }
                                     ?>
@@ -580,7 +604,6 @@ mysqli_query($conn, $update_telat_query);
                                             <span class="badge <?= $statusClass ?>">
                                                 <?= htmlspecialchars($row['status_peminjaman']) ?>
                                             </span>
-                                            <?= $isLate ? '<span class="badge bg-danger">Telat</span>' : '' ?>
                                         </td>
                                         <td class="text-center">
                                             <div class="action-buttons d-flex justify-content-center">
@@ -602,8 +625,19 @@ mysqli_query($conn, $update_telat_query);
                                                 <?php elseif ($row['status_peminjaman'] == 'Dipinjam' || $row['status_peminjaman'] == 'Telat'): ?>
                                                     <button class="btn btn-primary btn-sm btn-action" title="Tandai Dikembalikan"
                                                         onclick="updateStatus(<?= $row['id_pinjam'] ?>, 'complete')">
-                                                        <i class="fas fa-undo"></i>
+                                                        <i class="fas fa-check"></i>
                                                     </button>
+                                                <?php elseif ($row['status_peminjaman'] == 'Dikembalikan'): ?>
+                                                    <button class="btn btn-secondary btn-sm btn-action" title="Tandai Selesai"
+                                                        onclick="updateStatus(<?= $row['id_pinjam'] ?>, 'finish')">
+                                                        <i class="fas fa-check-double"></i>
+                                                    </button>
+                                                <?php elseif ($row['status_peminjaman'] == 'Dibooking'): ?>
+                                                    <span class="badge badge-booking">
+                                                        <?= htmlspecialchars($row['status_peminjaman']) ?>
+                                                        <br>
+                                                        <small>Mulai: <?= date('d M Y H:i', strtotime($row['tanggal_pinjam'])) ?></small>
+                                                    </span>
                                                 <?php endif; ?>
 
                                                 <a href="?delete=<?= $row['id_pinjam'] ?>"
@@ -1007,6 +1041,8 @@ mysqli_query($conn, $update_telat_query);
                             statusBadge = '<span class="badge bg-primary">Dipinjam</span>';
                         } else if (data.status_peminjaman == 'Dikembalikan') {
                             statusBadge = '<span class="badge bg-success">Dikembalikan</span>';
+                        } else if (data.status_peminjaman == 'Selesai') {
+                            statusBadge = '<span class="badge bg-secondary">Selesai</span>';
                         } else if (data.status_peminjaman == 'Hilang') {
                             statusBadge = '<span class="badge bg-dark">Hilang</span>';
                         } else if (data.status_peminjaman == 'Ditolak') {
@@ -1058,6 +1094,9 @@ mysqli_query($conn, $update_telat_query);
                     break;
                 case 'complete':
                     actionText = 'menandai sebagai dikembalikan';
+                    break;
+                case 'finish':
+                    actionText = 'menandai sebagai selesai';
                     break;
                 case 'reject':
                     actionText = 'menolak';

@@ -71,7 +71,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // Query untuk statistik card
-$query_barang = "SELECT COUNT(*) as total FROM t_barang";
+$query_barang = "SELECT COUNT(*) as total FROM t_barang_detail";
 $result_barang = mysqli_query($conn, $query_barang);
 $total_barang = mysqli_fetch_assoc($result_barang);
 
@@ -418,7 +418,7 @@ if ($selected_barang) {
                         </div>
                         <h5 class="card-title">Total Barang</h5>
                         <span class="card-value"><?= $total_barang['total'] ?></span>
-                        <span class="card-text">Total Barang Yang Tersedia</span>
+                        <span class="card-text">Total Data Barang</span>
                     </div>
                 </div>
 

@@ -85,7 +85,7 @@ $query_riwayat = "SELECT COUNT(*) AS total_riwayat FROM t_pinjam WHERE id_nip = 
 $riwayat = mysqli_fetch_array(mysqli_query($conn, $query_riwayat));
 
 // Query total yang sedang dipinjam oleh user ini
-$query_pinjam = "SELECT COUNT(*) AS total_dipinjam FROM t_pinjam WHERE id_nip = '$id_nip' AND status_peminjaman = 'Dipinjam'";
+$query_pinjam = "SELECT COUNT(*) AS total_dipinjam FROM t_pinjam WHERE id_nip = '$id_nip' AND status_peminjaman IN ('Dipinjam', 'Telat')";
 $pinjam = mysqli_fetch_array(mysqli_query($conn, $query_pinjam));
 
 // Query untuk menghitung total barang yang tersedia

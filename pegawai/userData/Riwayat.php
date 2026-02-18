@@ -21,7 +21,7 @@ $query_riwayat = "SELECT p.*, b.nama_barang, d.kode_barang, d.kondisi, d.status
                  JOIN t_barang_detail d ON p.id_detail = d.id_detail
                  JOIN t_barang b ON d.id_barang = b.id_barang
                  WHERE p.id_nip = '$id_nip' 
-                 AND (p.status_peminjaman = 'Dikembalikan' OR p.status_peminjaman = 'Ditolak' OR p.status_peminjaman = 'Hilang')
+                 AND (p.status_peminjaman = 'Dikembalikan' OR p.status_peminjaman = 'Ditolak' OR p.status_peminjaman = 'Hilang' OR p.status_peminjaman = 'Selesai')
                  ORDER BY p.tanggal_pinjam ASC";
 $result_riwayat = mysqli_query($conn, $query_riwayat);
 
@@ -348,6 +348,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fullName'])) {
                                                 case 'Hilang':
                                                     $statusClass = 'badge bg-dark';
                                                     $statusText = 'Hilang';
+                                                    break;
+                                                case 'Selesai':
+                                                    $statusClass = 'badge bg-secondary';
+                                                    $statusText = 'Selesai';
                                                     break;
                                                 default:
                                                     $statusClass = 'bg-secondary';

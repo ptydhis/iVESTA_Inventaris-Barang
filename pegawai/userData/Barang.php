@@ -1,4 +1,8 @@
 <?php
+// Tambahkan di bagian paling atas
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
 require "../../koneksi.php";
 session_start();
 
@@ -14,7 +18,31 @@ if ($_SESSION['role'] !== 'pegawai') {
     exit;
 }
 
-// Handle Pinjam Barang
+// =============================================
+// UPDATE STATUS OTOMATIS - DITAMBAHKAN
+// =============================================
+// Script untuk mengubah status booking menjadi menunggu verifikasi
+// ketika tanggal pinjam sudah tiba
+$query_update_booking = "UPDATE t_pinjam p 
+                         JOIN t_barang_detail d ON p.id_detail = d.id_detail
+                         SET p.status_peminjaman = 'Menunggu Verifikasi', 
+                             d.status = 'Menunggu Verifikasi'
+                         WHERE p.status_peminjaman = 'Dibooking' 
+                         AND p.tanggal_pinjam <= NOW()";
+
+if (mysqli_query($conn, $query_update_booking)) {
+    $affected_rows = mysqli_affected_rows($conn);
+    // Optional: log jika diperlukan
+    // if ($affected_rows > 0) {
+    //     error_log("Updated $affected_rows booking records to waiting verification");
+    // }
+} else {
+    // Optional: log error jika diperlukan
+    // error_log("Error updating booking status: " . mysqli_error($conn));
+}
+// =============================================
+
+// Handle Pinjam Barang - DIMODIFIKASI untuk mendukung booking
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['pinjam_item'])) {
     $id_detail = mysqli_real_escape_string($conn, $_POST['id_detail']);
     $id_nip = $_SESSION['id_nip'];
@@ -22,16 +50,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['pinjam_item'])) {
     $tgl_kembali = date('Y-m-d H:i:s', strtotime($_POST['tgl_kembali']));
     $keperluan = mysqli_real_escape_string($conn, $_POST['keperluan']);
 
-    // Insert data peminjaman dengan status Menunggu Verifikasi
+    // Cek status barang saat ini
+    $query_check_status = "SELECT status FROM t_barang_detail WHERE id_detail = '$id_detail'";
+    $result_check = mysqli_query($conn, $query_check_status);
+    $current_status = mysqli_fetch_assoc($result_check)['status'];
+
+    // Jika barang sedang dibooking, cek apakah tanggal pinjam baru lebih awal dari booking yang ada
+    if ($current_status === 'Dibooking') {
+        $query_check_booking = "SELECT tanggal_pinjam 
+                               FROM t_pinjam 
+                               WHERE id_detail = '$id_detail' 
+                               AND status_peminjaman = 'Dibooking' 
+                               ORDER BY tanggal_pinjam ASC 
+                               LIMIT 1";
+
+        $result_booking = mysqli_query($conn, $query_check_booking);
+        $existing_booking = mysqli_fetch_assoc($result_booking);
+
+        if ($existing_booking && strtotime($tgl_pinjam) < strtotime($existing_booking['tanggal_pinjam'])) {
+            // Peminjaman baru lebih awal dari booking yang ada, lanjutkan
+        } else {
+            $_SESSION['error'] = "Barang sudah dibooking untuk tanggal tersebut. Silakan pilih tanggal lain.";
+            header("Location: " . $_SERVER['PHP_SELF']);
+            exit;
+        }
+    }
+
+    // Tentukan status berdasarkan tanggal pinjam
+    $current_date = date('Y-m-d H:i:s');
+    $status_peminjaman = (strtotime($tgl_pinjam) > strtotime($current_date)) ? 'Dibooking' : 'Menunggu Verifikasi';
+    $status_barang = (strtotime($tgl_pinjam) > strtotime($current_date)) ? 'Dibooking' : 'Menunggu Verifikasi';
+
+    // Insert data peminjaman
     $query_pinjam = "INSERT INTO t_pinjam (id_detail, id_nip, tanggal_pinjam, tanggal_kembali, jumlah, status_peminjaman, keterangan) 
-                     VALUES ('$id_detail', '$id_nip', '$tgl_pinjam', '$tgl_kembali', 1, 'Menunggu Verifikasi', '$keperluan')";
+                     VALUES ('$id_detail', '$id_nip', '$tgl_pinjam', '$tgl_kembali', 1, '$status_peminjaman', '$keperluan')";
 
     if (mysqli_query($conn, $query_pinjam)) {
-        // Update status barang detail menjadi Menunggu Verifikasi
-        $query_update = "UPDATE t_barang_detail SET status='Menunggu Verifikasi' WHERE id_detail='$id_detail'";
-        mysqli_query($conn, $query_update);
+        // Update status barang detail hanya jika status berubah
+        if ($current_status !== $status_barang) {
+            $query_update = "UPDATE t_barang_detail SET status='$status_barang' WHERE id_detail='$id_detail'";
+            mysqli_query($conn, $query_update);
+        }
 
-        $_SESSION['success'] = "Peminjaman berhasil diajukan. Menunggu verifikasi admin.";
+        $_SESSION['success'] = ($status_peminjaman == 'Dibooking')
+            ? "Booking berhasil diajukan. Barang akan dipinjam pada tanggal yang ditentukan."
+            : "Peminjaman berhasil diajukan. Menunggu verifikasi admin.";
+
         header("Location: " . $_SERVER['PHP_SELF']);
         exit;
     } else {
@@ -104,18 +168,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['fullName'])) {
     }
 }
 
-// Query untuk mendapatkan data barang dengan perhitungan ketersediaan yang benar
+// Query untuk mendapatkan semua barang UNIK (berdasarkan nama_barang)
+$query_all_barang = "SELECT DISTINCT nama_barang FROM t_barang ORDER BY nama_barang";
+$result_all_barang = mysqli_query($conn, $query_all_barang);
+
+// Handle Filter
+$selected_barang = '';
+if (isset($_GET['barang'])) {
+    $selected_barang = mysqli_real_escape_string($conn, $_GET['barang']);
+}
+
+// Query untuk mendapatkan data barang dengan perhitungan ketersediaan yang benar - DIMODIFIKASI
 $query = "SELECT b.*, 
              (SELECT COUNT(*) FROM t_barang_detail d 
               WHERE d.id_barang = b.id_barang 
-              AND d.status = 'Tersedia'
+              AND (d.status = 'Tersedia' OR d.status = 'Dibooking')
               AND NOT EXISTS (
                   SELECT 1 FROM t_pinjam p 
                   WHERE p.id_detail = d.id_detail 
                   AND p.status_peminjaman IN ('Dipinjam', 'Menunggu Verifikasi')
               )) as tersedia,
+             (SELECT COUNT(*) FROM t_barang_detail d 
+              WHERE d.id_barang = b.id_barang 
+              AND d.status = 'Dibooking') as dibooking,
              (SELECT COUNT(*) FROM t_barang_detail d WHERE d.id_barang = b.id_barang) as total
-          FROM t_barang b";
+          FROM t_barang b
+          WHERE 1=1";
+
+// Tambahkan kondisi filter jika ada
+if (!empty($selected_barang)) {
+    $query .= " AND b.nama_barang = '$selected_barang'";
+}
+
 $result = mysqli_query($conn, $query);
 
 if (!$result) {
@@ -136,6 +220,40 @@ if (!$result) {
         href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Raleway:wght@400;500;600&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="../../assets/css/style.css">
+    <style>
+        :root {
+            --transition-speed: 0.3s;
+        }
+
+        .filter-box {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .filter-select {
+            width: 150px !important;
+        }
+
+        .refresh-btn {
+            background: none;
+            border: none;
+            color: #6c757d;
+            cursor: pointer;
+            font-size: 1.2rem;
+            padding: 0 5px;
+        }
+
+        .refresh-btn:hover {
+            color: #0d6efd;
+        }
+        
+        /* Tambahkan style untuk status booking */
+        .badge-booking {
+            background-color: #ffc107;
+            color: #000;
+        }
+    </style>
 </head>
 
 <body>
@@ -248,6 +366,39 @@ if (!$result) {
             </div>
         </nav>
 
+        <!-- Filter Content -->
+        <div class="container-fluid">
+            <div class="table-container">
+                <div class="table-header d-flex justify-content-between align-items-center mb-3">
+                    <!-- Filter Section -->
+                    <div class="d-flex align-items-center gap-3">
+                        <div class="d-flex align-items-center gap-2">
+                            <label for="barang" class="form-label mb-0">Nama Barang:</label>
+                            <select class="form-select form-select-sm filter-select" name="barang" id="barang"
+                                style="width: 170px;">
+                                <option value="">Semua Barang</option>
+                                <?php
+                                mysqli_data_seek($result_all_barang, 0);
+                                while ($barang = mysqli_fetch_assoc($result_all_barang)): ?>
+                                    <option value="<?= htmlspecialchars($barang['nama_barang']) ?>"
+                                        <?= $selected_barang == $barang['nama_barang'] ? 'selected' : '' ?>>
+                                        <?= htmlspecialchars($barang['nama_barang']) ?>
+                                    </option>
+                                <?php endwhile; ?>
+                            </select>
+                        </div>
+        
+                        <button type="button" class="btn btn-primary btn-sm" id="applyFilter">
+                            <i class="fas fa-filter"></i> Filter
+                        </button>
+                        <button type="button" class="refresh-btn" id="refreshBtn" title="Reset Filter">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Barang Section -->
         <section id="barang" class="barang section">
             <div class="container" data-aos="fade-up" data-aos-delay="100">
@@ -277,6 +428,7 @@ if (!$result) {
                         $fotoBarang = htmlspecialchars($row['foto_barang']);
                         $milik = $row['milik'];
                         $tersedia = $row['tersedia'];
+                        $dibooking = $row['dibooking'];
                         $total = $row['total'];
                         ?>
                         <div class="col-xl-4 col-md-6" data-aos="zoom-in" data-aos-delay="200">
@@ -304,7 +456,11 @@ if (!$result) {
                                     </h3>
                                     <p>
                                         <span class="badge bg-primary"><?= $milik; ?></span>
-                                        <span class="badge bg-success">Tersedia: <?= $tersedia; ?>/<?= $total; ?></span>
+                                        <span class="badge bg-success">Tersedia: <?= $tersedia; ?></span>
+                                        <?php if ($dibooking > 0): ?>
+                                            <span class="badge badge-booking">Dibooking: <?= $dibooking; ?></span>
+                                        <?php endif; ?>
+                                        <span class="badge bg-secondary">Total: <?= $total; ?></span>
                                     </p>
                                     <p class="text-muted"><?= $merk; ?></p>
                                     <div class="d-flex justify-content-between mt-2">
@@ -363,8 +519,10 @@ if (!$result) {
                                                     <tr>
                                                         <th>Stok</th>
                                                         <td>
-                                                            <span class="badge bg-success">Tersedia:
-                                                                <?= $tersedia; ?></span>
+                                                            <span class="badge bg-success">Tersedia: <?= $tersedia; ?></span>
+                                                            <?php if ($dibooking > 0): ?>
+                                                                <span class="badge badge-booking">Dibooking: <?= $dibooking; ?></span>
+                                                            <?php endif; ?>
                                                             <span class="badge bg-secondary">Total: <?= $total; ?></span>
                                                         </td>
                                                     </tr>
@@ -383,34 +541,36 @@ if (!$result) {
                                                         </thead>
                                                         <tbody>
                                                             <?php
-                                                            // Query untuk mendapatkan detail item dengan status sebenarnya
+                                                            // Query untuk mendapatkan detail item dengan status sebenarnya - DIMODIFIKASI
                                                             $query_detail = "
-                                                                SELECT 
-                                                                    d.id_detail,
-                                                                    d.kode_barang,
-                                                                    d.kondisi,
-                                                                    d.status AS status_barang,
-                                                                    p.id_pinjam,
-                                                                    p.status_peminjaman,
-                                                                    p.tanggal_kembali,
-                                                                    CASE 
-                                                                        WHEN p.status_peminjaman = 'Dipinjam' AND p.tanggal_kembali < NOW() THEN 'Telat'
-                                                                        WHEN p.status_peminjaman = 'Dipinjam' THEN 'Dipinjam'
-                                                                        WHEN p.status_peminjaman = 'Menunggu Verifikasi' THEN 'Menunggu Verifikasi'
-                                                                        ELSE d.status
-                                                                    END AS status_pinjam
-                                                                FROM t_barang_detail d
-                                                                LEFT JOIN (
-                                                                    SELECT *
-                                                                    FROM t_pinjam
-                                                                    WHERE id_pinjam IN (
-                                                                        SELECT MAX(id_pinjam)
-                                                                        FROM t_pinjam
-                                                                        GROUP BY id_detail
-                                                                    )
-                                                                ) p ON d.id_detail = p.id_detail
-                                                                WHERE d.id_barang = '$idBarang'
-                                                            ";
+    SELECT 
+        d.id_detail,
+        d.kode_barang,
+        d.kondisi,
+        d.status AS status_barang,
+        p.id_pinjam,
+        p.status_peminjaman,
+        p.tanggal_pinjam,
+        p.tanggal_kembali,
+        CASE 
+            WHEN p.status_peminjaman = 'Dipinjam' AND p.tanggal_kembali < NOW() THEN 'Telat'
+            WHEN p.status_peminjaman = 'Dipinjam' THEN 'Dipinjam'
+            WHEN p.status_peminjaman = 'Menunggu Verifikasi' THEN 'Menunggu Verifikasi'
+            WHEN p.status_peminjaman = 'Dibooking' THEN 'Dibooking'
+            ELSE d.status
+        END AS status_pinjam
+    FROM t_barang_detail d
+    LEFT JOIN (
+        SELECT *
+        FROM t_pinjam
+        WHERE id_pinjam IN (
+            SELECT MAX(id_pinjam)
+            FROM t_pinjam
+            GROUP BY id_detail
+        )
+    ) p ON d.id_detail = p.id_detail
+    WHERE d.id_barang = '$idBarang'
+";
                                                             $result_detail = mysqli_query($conn, $query_detail);
 
                                                             if (!$result_detail) {
@@ -418,10 +578,10 @@ if (!$result) {
                                                             } else {
                                                                 while ($row_detail = mysqli_fetch_assoc($result_detail)) {
                                                                     $statusClass = '';
-                                                                    $display_status = $row_detail['status_barang']; // Gunakan status dari t_barang_detail untuk tampilan utama
+                                                                    $display_status = $row_detail['status_barang'];
                                                                     $status_pinjam = $row_detail['status_pinjam'] ?? null;
 
-                                                                    // Tentukan class badge
+                                                                    // Tentukan class badge - DITAMBAHKAN status booking
                                                                     switch ($display_status) {
                                                                         case 'Tersedia':
                                                                             $statusClass = 'bg-success';
@@ -431,6 +591,9 @@ if (!$result) {
                                                                             break;
                                                                         case 'Menunggu Verifikasi':
                                                                             $statusClass = 'badge-waiting';
+                                                                            break;
+                                                                        case 'Dibooking': // Status baru
+                                                                            $statusClass = 'badge-booking';
                                                                             break;
                                                                         case 'Hilang':
                                                                             $statusClass = 'bg-dark';
@@ -464,44 +627,53 @@ if (!$result) {
                                                                         <td>
                                                                             <span class="badge <?= $statusClass ?>">
                                                                                 <?= str_replace(' (Telat)', '', htmlspecialchars($display_status)) ?>
-                                                                                <?php if ($isLate): ?>
+                                                                                <?php
+                                                                                // Tampilkan ikon telat jika status_pinjam adalah 'Telat'
+                                                                                if (isset($row_detail['status_pinjam']) && $row_detail['status_pinjam'] === 'Telat'): ?>
                                                                                     <i class="fas fa-exclamation-triangle ms-1"></i>
                                                                                 <?php endif; ?>
                                                                             </span>
                                                                         </td>
                                                                         <td>
-                                                                            <?php
-                                                                            $status_barang = $row_detail['status_barang'];
-                                                                            $status_peminjaman = $row_detail['status_peminjaman'] ?? null;
-                                                                            $tanggal_kembali = $row_detail['tanggal_kembali'] ?? null;
+    <?php
+    $status_barang = $row_detail['status_barang'];
+    $status_peminjaman = $row_detail['status_peminjaman'] ?? null;
+    $tanggal_pinjam = $row_detail['tanggal_pinjam'] ?? null;
+    $tanggal_kembali = $row_detail['tanggal_kembali'] ?? null;
 
-                                                                            if ($status_barang === 'Tersedia'): ?>
-                                                                                <button class="btn btn-sm btn-success"
-                                                                                    data-bs-toggle="modal"
-                                                                                    data-bs-target="#pinjamItemModal<?= $row_detail['id_detail'] ?>">
-                                                                                    <i class="fas fa-hand-holding"></i> Pinjam
-                                                                                </button>
-                                                                            <?php elseif ($status_barang === 'Menunggu Verifikasi'): ?>
-                                                                                <button class="btn btn-sm btn-warning" disabled>
-                                                                                    <i class="fas fa-clock"></i> Menunggu
-                                                                                </button>
-                                                                            <?php elseif ($status_peminjaman === 'Telat'): ?>
-                                                                                <span class="badge badge-waiting text-black">
-                                                                                    <i class="fas fa-exclamation-triangle"></i> Telat
-                                                                                </span>
-                                                                            <?php elseif ($status_barang === 'Dipinjam' && $tanggal_kembali): ?>
-                                                                                <span class="text-muted">
-                                                                                    <i class="far fa-calendar-alt"></i>
-                                                                                    Dikembalikan:
-                                                                                    <br>
-                                                                                    <?= date('d M Y H:i', strtotime($tanggal_kembali)) ?>
-                                                                                </span>
-                                                                            <?php else: ?>
-                                                                                <span class="badge bg-dark">
-                                                                                    <?= $status_barang ?>
-                                                                                </span>
-                                                                            <?php endif; ?>
-                                                                        </td>
+    if ($status_barang === 'Tersedia' || $status_barang === 'Dibooking'): ?>
+        <button class="btn btn-sm btn-success"
+            data-bs-toggle="modal"
+            data-bs-target="#pinjamItemModal<?= $row_detail['id_detail'] ?>">
+            <i class="fas fa-hand-holding"></i> Pinjam
+        </button>
+        <?php if ($status_barang === 'Dibooking'): ?>
+            <br>
+            <small class="text-muted mt-1 d-block">
+                Sudah dibooking untuk: <?= date('d M Y H:i', strtotime($tanggal_pinjam)) ?>
+            </small>
+        <?php endif; ?>
+    <?php elseif ($status_barang === 'Menunggu Verifikasi'): ?>
+        <button class="btn btn-sm btn-warning" disabled>
+            <i class="fas fa-clock"></i> Menunggu
+        </button>
+    <?php elseif ($status_peminjaman === 'Telat'): ?>
+        <span class="badge badge-waiting text-black">
+            <i class="fas fa-exclamation-triangle"></i> Telat
+        </span>
+    <?php elseif ($status_barang === 'Dipinjam' && $tanggal_kembali): ?>
+        <span class="text-muted">
+            <i class="far fa-calendar-alt"></i>
+            Dikembalikan:
+            <br>
+            <?= date('d M Y H:i', strtotime($tanggal_kembali)) ?>
+        </span>
+    <?php else: ?>
+        <span class="badge bg-dark">
+            <?= $status_barang ?>
+        </span>
+    <?php endif; ?>
+</td>
                                                                     </tr>
                                                                     <?php
                                                                 }
@@ -614,63 +786,130 @@ if (!$result) {
         </div>
     </div>
 
-    <!-- Pinjam Item Modal -->
-    <?php
-    // Query untuk mendapatkan semua item barang yang tersedia
-    $query_all_items = "SELECT d.*, b.nama_barang 
-                       FROM t_barang_detail d
-                       JOIN t_barang b ON d.id_barang = b.id_barang
-                       WHERE d.status = 'Tersedia'";
-    $result_all_items = mysqli_query($conn, $query_all_items);
+    <!-- Pinjam Item Modal - DIMODIFIKASI untuk menampilkan info booking -->
+<?php
+// Query untuk mendapatkan semua item barang yang tersedia atau dibooking
+$query_all_items = "SELECT d.*, b.nama_barang 
+                   FROM t_barang_detail d
+                   JOIN t_barang b ON d.id_barang = b.id_barang
+                   WHERE d.status IN ('Tersedia', 'Dibooking')";
+$result_all_items = mysqli_query($conn, $query_all_items);
 
-    while ($item = mysqli_fetch_assoc($result_all_items)) {
-        $id_detail = $item['id_detail'];
-        $nama_barang = htmlspecialchars($item['nama_barang']);
-        $kode_barang = htmlspecialchars($item['kode_barang']);
-        ?>
-        <div class="modal fade" id="pinjamItemModal<?= $id_detail ?>" tabindex="-1" aria-hidden="true">
-            <div class="modal-dialog">
-                <div class="modal-content">
-                    <form method="post" action="">
-                        <input type="hidden" name="pinjam_item" value="1">
-                        <input type="hidden" name="id_detail" value="<?= $id_detail ?>">
-                        <div class="modal-header">
-                            <h5 class="modal-title">Form Peminjaman</h5>
-                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+while ($item = mysqli_fetch_assoc($result_all_items)) {
+    $id_detail = $item['id_detail'];
+    $nama_barang = htmlspecialchars($item['nama_barang']);
+    $kode_barang = htmlspecialchars($item['kode_barang']);
+    $status_barang = $item['status'];
+    
+    // Cek jika ada booking untuk item ini
+    $query_booking_info = "SELECT tanggal_pinjam FROM t_pinjam 
+                          WHERE id_detail = '$id_detail' 
+                          AND status_peminjaman = 'Dibooking' 
+                          ORDER BY tanggal_pinjam ASC";
+    $result_booking = mysqli_query($conn, $query_booking_info);
+    $booking_dates = [];
+    while ($booking = mysqli_fetch_assoc($result_booking)) {
+        $booking_dates[] = date('d M Y H:i', strtotime($booking['tanggal_pinjam']));
+    }
+    ?>
+    <div class="modal fade" id="pinjamItemModal<?= $id_detail ?>" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <form method="post" action="">
+                    <input type="hidden" name="pinjam_item" value="1">
+                    <input type="hidden" name="id_detail" value="<?= $id_detail ?>">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Form Peminjaman</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label">Barang</label>
+                            <input type="text" class="form-control" value="<?= $nama_barang ?>" readonly>
                         </div>
-                        <div class="modal-body">
-                            <div class="mb-3">
-                                <label class="form-label">Barang</label>
-                                <input type="text" class="form-control" value="<?= $nama_barang ?>" readonly>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Kode Barang</label>
-                                <input type="text" class="form-control" value="<?= $kode_barang ?>" readonly>
-                            </div>
-                            <div class="mb-3">
-                                <label for="tgl_pinjam" class="form-label">Tanggal & Waktu Pinjam</label>
-                                <input type="datetime-local" class="form-control" id="tgl_pinjam" name="tgl_pinjam"
-                                    required>
-                            </div>
-                            <div class="mb-3">
-                                <label for="tgl_kembali" class="form-label">Tanggal & Waktu Dikembalikan</label>
-                                <input type="datetime-local" class="form-control" id="tgl_kembali" name="tgl_kembali"
-                                    required>
-                            </div>
-                            <div class="mb-3">
-                                <label for="keperluan" class="form-label">Keperluan</label>
-                                <textarea class="form-control" id="keperluan" name="keperluan" rows="3" required></textarea>
-                            </div>
+                        <div class="mb-3">
+                            <label class="form-label">Kode Barang</label>
+                            <input type="text" class="form-control" value="<?= $kode_barang ?>" readonly>
                         </div>
-                        <div class="modal-footer">
-                            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
-                            <button type="submit" class="btn btn-primary">Ajukan Peminjaman</button>
+                        
+                        <?php if (!empty($booking_dates)): ?>
+                        <div class="alert alert-info">
+                            <small>
+                                <i class="fas fa-info-circle"></i> Barang ini sudah dibooking untuk:
+                                <ul class="mb-0 mt-1">
+                                    <?php foreach ($booking_dates as $date): ?>
+                                        <li><?= $date ?></li>
+                                    <?php endforeach; ?>
+                                </ul>
+                                Pilih tanggal di luar tanggal booking yang sudah ada.
+                            </small>
                         </div>
-                    </form>
-                </div>
+                        <?php endif; ?>
+                        
+                        <div class="mb-3">
+                            <label for="tgl_pinjam" class="form-label">Tanggal & Waktu Pinjam</label>
+                            <input type="datetime-local" class="form-control" id="tgl_pinjam" name="tgl_pinjam"
+                                required onchange="checkBookingStatus(this)">
+                            <small class="text-muted" id="bookingInfo"></small>
+                        </div>
+                        <div class="mb-3">
+                            <label for="tgl_kembali" class="form-label">Tanggal & Waktu Dikembalikan</label>
+                            <input type="datetime-local" class="form-control" id="tgl_kembali" name="tgl_kembali"
+                                required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="keperluan" class="form-label">Keperluan</label>
+                            <textarea class="form-control" id="keperluan" name="keperluan" rows="3" required></textarea>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+                        <button type="submit" class="btn btn-primary" id="submitBtn">Ajukan Peminjaman</button>
+                    </div>
+                </form>
             </div>
         </div>
-    <?php } ?>
+    </div>
+    
+    <script>
+        function checkBookingStatus(input) {
+            const selectedDate = new Date(input.value);
+            const currentDate = new Date();
+            const bookingInfo = document.getElementById('bookingInfo');
+            const submitBtn = document.getElementById('submitBtn');
+            
+            if (selectedDate > currentDate) {
+                bookingInfo.textContent = 'Barang akan dibooking untuk tanggal yang dipilih.';
+                bookingInfo.className = 'text-muted text-warning';
+                submitBtn.textContent = 'Ajukan Booking';
+            } else {
+                bookingInfo.textContent = 'Barang akan langsung dipinjam setelah disetujui admin.';
+                bookingInfo.className = 'text-muted';
+                submitBtn.textContent = 'Ajukan Peminjaman';
+            }
+        }
+        
+        // Set nilai default dan trigger event onload
+        document.addEventListener('DOMContentLoaded', function() {
+            const tglPinjam = document.getElementById('tgl_pinjam');
+            if (tglPinjam) {
+                const now = new Date();
+                const nextWeek = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+                
+                // Format untuk input datetime-local: YYYY-MM-DDTHH:MM
+                const formatDateTime = (date) => {
+                    const pad = (num) => num.toString().padStart(2, '0');
+                    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+                };
+                
+                tglPinjam.value = formatDateTime(now);
+                tglPinjam.dispatchEvent(new Event('change'));
+            }
+        });
+    </script>
+    <?php
+}
+?>
 
     <!-- Click Outside to Close Dropdown -->
     <div class="dropdown-overlay" id="dropdownOverlay"></div>
@@ -818,9 +1057,31 @@ if (!$result) {
 
                         inputPinjam.value = formatDateTime(now);
                         inputKembali.value = formatDateTime(nextWeek);
+                        
+                        // Trigger event change untuk menampilkan info booking
+                        inputPinjam.dispatchEvent(new Event('change'));
                     }
                 });
             });
+        });
+
+        // Handle Filter
+        document.getElementById('applyFilter').addEventListener('click', function() {
+            const barangFilter = document.getElementById('barang').value;
+            const url = new URL(window.location.href);
+            
+            if (barangFilter) {
+                url.searchParams.set('barang', barangFilter);
+            } else {
+                url.searchParams.delete('barang');
+            }
+            
+            window.location.href = url.toString();
+        });
+
+        // Reset filter
+        document.getElementById('refreshBtn').addEventListener('click', function() {
+            window.location.href = window.location.pathname;
         });
     </script>
 </body>

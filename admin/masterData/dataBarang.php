@@ -341,8 +341,13 @@ $offset = ($current_page - 1) * $entries_per_page;
 $search = isset($_GET['search']) ? mysqli_real_escape_string($conn, $_GET['search']) : '';
 $search_condition = $search ? "WHERE nama_barang LIKE '%$search%' OR merk LIKE '%$search%'" : '';
 
+// Filter functionality
+$milik_filter = isset($_GET['milik']) ? mysqli_real_escape_string($conn, $_GET['milik']) : '';
+$milik_condition = $milik_filter ? ($search_condition ? " AND " : "WHERE ") . "milik = '$milik_filter'" : '';
+$combined_condition = $search_condition . $milik_condition;
+
 // Count total rows for pagination
-$total_query = "SELECT COUNT(*) AS total FROM t_barang $search_condition";
+$total_query = "SELECT COUNT(*) AS total FROM t_barang $combined_condition";
 $total_result = mysqli_query($conn, $total_query);
 $total_rows = mysqli_fetch_assoc($total_result)['total'];
 $total_pages = ceil($total_rows / $entries_per_page);
@@ -361,8 +366,22 @@ if (!in_array($sort_column, $allowed_columns)) {
 }
 $sort_order = $sort_order === 'ASC' ? 'ASC' : 'DESC';
 
-// Get barang data with pagination dan sorting
-$query = "SELECT * FROM t_barang $search_condition ORDER BY $sort_column $sort_order LIMIT $offset, $entries_per_page";
+// Get barang data with pagination dan sorting - DIMODIFIKASI untuk menampilkan status booking
+$query = "SELECT b.*, 
+             (SELECT COUNT(*) FROM t_barang_detail d 
+              WHERE d.id_barang = b.id_barang 
+              AND d.status = 'Tersedia'
+              AND NOT EXISTS (
+                  SELECT 1 FROM t_pinjam p 
+                  WHERE p.id_detail = d.id_detail 
+                  AND p.status_peminjaman IN ('Dipinjam', 'Menunggu Verifikasi', 'Dibooking')
+              )) as tersedia,
+             (SELECT COUNT(*) FROM t_barang_detail d 
+              WHERE d.id_barang = b.id_barang 
+              AND d.status = 'Dibooking') as dibooking,
+             (SELECT COUNT(*) FROM t_barang_detail d WHERE d.id_barang = b.id_barang) as total
+          FROM t_barang b
+          $combined_condition ORDER BY $sort_column $sort_order LIMIT $offset, $entries_per_page";
 $resultBarang = mysqli_query($conn, $query);
 ?>
 
@@ -553,6 +572,16 @@ $resultBarang = mysqli_query($conn, $query);
                                 <input type="hidden" name="entries" value="<?= $entries_per_page ?>">
                             </form>
                         </div>
+                        <div class="filter-box me-2">
+                            <select class="form-select form-select-sm filter-select" name="milik" id="milikFilter"
+                                style="min-width: 140px;">
+                                <option value="">Semua Milik</option>
+                                <option value="Prodi" <?= $milik_filter == 'Prodi' ? 'selected' : '' ?>>Prodi</option>
+                                <option value="Lab 1" <?= $milik_filter == 'Lab 1' ? 'selected' : '' ?>>Lab 1</option>
+                                <option value="Lab 2" <?= $milik_filter == 'Lab 2' ? 'selected' : '' ?>>Lab 2</option>
+                                <option value="Lab 3" <?= $milik_filter == 'Lab 3' ? 'selected' : '' ?>>Lab 3</option>
+                            </select>
+                        </div>
                         <button class="btn btn-success btn-sm" data-bs-toggle="modal"
                             data-bs-target="#tambahBarangModal">
                             <i class="fas fa-plus"></i> Tambah Barang
@@ -586,6 +615,10 @@ $resultBarang = mysqli_query($conn, $query);
                                 <?php
                                 $no = $offset + 1;
                                 while ($row = mysqli_fetch_assoc($resultBarang)):
+                                    // TAMBAHKAN DI SINI - sebelum menggunakan variabel tersedia, dibooking, total
+                                    $tersedia = $row['tersedia'] ?? 0;
+                                    $dibooking = $row['dibooking'] ?? 0;
+                                    $total = $row['total'] ?? 0;
                                     ?>
                                     <tr>
                                         <td class="text-center"><?= $no ?></td>
@@ -611,6 +644,13 @@ $resultBarang = mysqli_query($conn, $query);
                                             <span class="badge <?= $badgeClass ?>">
                                                 <?= htmlspecialchars($row['milik']) ?>
                                             </span>
+                                            <br>
+                                            <!-- TAMBAHKAN TAMPILAN STATUS DI SINI -->
+                                            <span class="badge bg-success mt-1">Tersedia: <?= $tersedia ?></span>
+                                            <?php if ($dibooking > 0): ?>
+                                                <span class="badge badge-booking mt-1">Dibooking: <?= $dibooking ?></span>
+                                            <?php endif; ?>
+                                            <span class="badge bg-secondary mt-1">Total: <?= $total ?></span>
                                         </td>
                                         <td class="text-center">
                                             <div class="action-buttons justify-content-center">
@@ -656,20 +696,20 @@ $resultBarang = mysqli_query($conn, $query);
                             <!-- Previous Button -->
                             <li class="page-item <?= $current_page <= 1 ? 'disabled' : '' ?>">
                                 <a class="page-link"
-                                    href="?page=<?= $current_page - 1 ?>&search=<?= urlencode($search) ?>&entries=<?= $entries_per_page ?>">Previous</a>
+                                    href="?page=<?= $current_page - 1 ?>&search=<?= urlencode($search) ?>&milik=<?= urlencode($milik_filter) ?>&entries=<?= $entries_per_page ?>">Previous</a>
                             </li>
 
                             <?php for ($i = $start_page; $i <= $end_page; $i++): ?>
                                 <li class="page-item <?= $i == $current_page ? 'disabled' : '' ?>">
                                     <a class="page-link"
-                                        href="?page=<?= $i ?>&search=<?= urlencode($search) ?>&entries=<?= $entries_per_page ?>"><?= $i ?></a>
+                                        href="?page=<?= $i ?>&search=<?= urlencode($search) ?>&milik=<?= urlencode($milik_filter) ?>&entries=<?= $entries_per_page ?>"><?= $i ?></a>
                                 </li>
                             <?php endfor; ?>
 
                             <!-- Next Button -->
                             <li class="page-item <?= $current_page >= $total_pages ? 'disabled' : '' ?>">
                                 <a class="page-link"
-                                    href="?page=<?= $current_page + 1 ?>&search=<?= urlencode($search) ?>&entries=<?= $entries_per_page ?>">Next</a>
+                                    href="?page=<?= $current_page + 1 ?>&search=<?= urlencode($search) ?>&milik=<?= urlencode($milik_filter) ?>&entries=<?= $entries_per_page ?>">Next</a>
                             </li>
                         </ul>
                     </nav>
@@ -1284,6 +1324,27 @@ $resultBarang = mysqli_query($conn, $query);
                     arrow.classList.add('active');
                 }
             }
+        });
+
+        // Handle filter change
+        document.getElementById('milikFilter').addEventListener('change', function () {
+            const milik = this.value;
+            const search = '<?= htmlspecialchars($search) ?>';
+            const entries = '<?= $entries_per_page ?>';
+            const sort = '<?= $sort_column ?>';
+            const order = '<?= $sort_order ?>';
+
+            window.location.href = `?page=1&entries=${entries}&search=${encodeURIComponent(search)}&milik=${encodeURIComponent(milik)}&sort=${sort}&order=${order}`;
+        });
+
+        // Update search form to include milik filter
+        document.getElementById('searchForm').addEventListener('submit', function (e) {
+            e.preventDefault();
+            const search = document.getElementById('searchInput').value;
+            const milik = document.getElementById('milikFilter').value;
+            const entries = '<?= $entries_per_page ?>';
+
+            window.location.href = `?page=1&entries=${entries}&search=${encodeURIComponent(search)}&milik=${encodeURIComponent(milik)}`;
         });
     </script>
 </body>
